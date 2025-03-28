@@ -44,14 +44,6 @@ RUN if [ "$MINIMUM_BUILD" = "true" ]; then \
         uv pip install --system -r requirements.txt --no-cache-dir; \
     fi
 
-RUN echo "Change"
-
-RUN guardrails configure --token "$GUARDRAILS_API_KEY" --disable-metrics --disable-remote-inferencing
-    
-RUN echo "Installing Guardrails hub components..."
-RUN guardrails hub install hub://guardrails/nsfw_text
-RUN guardrails hub install hub://scb-10x/correct_language 
-
 
 # Layer on for other components
 FROM base AS app
@@ -71,6 +63,13 @@ RUN if [ -n "$PIPELINES_URLS" ] || [ -n "$PIPELINES_REQUIREMENTS_PATH" ]; then \
 # Expose the port
 ENV HOST="0.0.0.0"
 ENV PORT="9099"
+
+
+RUN guardrails configure --token "$GUARDRAILS_API_KEY" --disable-metrics --disable-remote-inferencing
+    
+RUN echo "Installing Guardrails hub components..."
+RUN guardrails hub install hub://guardrails/nsfw_text
+RUN guardrails hub install hub://scb-10x/correct_language 
 
 # if we already installed the requirements on build, we can skip this step on run
 # ENTRYPOINT [ "bash", "start.sh" ]
