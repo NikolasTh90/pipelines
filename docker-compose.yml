@@ -8,7 +8,7 @@ services:
       args:
         - MINIMUM_BUILD=false
         - USE_CUDA=true
-        - USE_CUDA_VER=cu121  # Using CUDA 12.1 as a standard version
+        - USE_CUDA_VER=cu124  # Using CUDA 12.4 as a standard version
     ports:
       - "9099:9099"
     volumes:
