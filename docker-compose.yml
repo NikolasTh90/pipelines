@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  pipelines:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - MINIMUM_BUILD=false
+        - USE_CUDA=true
+        - USE_CUDA_VER=cu121  # Using CUDA 12.1 as a standard version
+    ports:
+      - "9099:9099"
+    volumes:
+      - pipelines_data:/app/pipelines
+      # Mount local pipeline directory for development (optional, uncomment if needed)
+      # - ./pipelines:/app/pipelines
+    environment:
+      - HOST=0.0.0.0
+      - PORT=9099
+      - USE_CUDA=true
+      - DEVICE=cuda
+      # Pre-install Guardrails components
+      - GUARDRAILS_AUTO_INSTALL=true
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: ["bash", "start.sh"]
+
+volumes:
+  pipelines_data:
+    # This volume persists pipeline data between container restarts

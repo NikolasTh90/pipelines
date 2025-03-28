@@ -18,8 +18,11 @@ ENV ENV=prod \
 # Install GCC and build tools. 
 # These are kept in the final image to enable installing packages on the fly.
 RUN apt-get update && \
-    apt-get install -y gcc build-essential curl git && \
-    apt-get clean && \
+    apt-get install -y gcc build-essential curl git
+
+RUN apt-get install -y libgl1-mesa-glx libglib2.0-0 libsm6 libxext6 libxrender-dev
+
+RUN apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -40,6 +43,10 @@ RUN if [ "$MINIMUM_BUILD" = "true" ]; then \
     else \
         uv pip install --system -r requirements.txt --no-cache-dir; \
     fi
+
+RUN echo "Installing Guardrails hub components..." && \
+guardrails hub install hub://guardrails/nsfw_text || echo "Hub install failed, using pip fallback" && \
+guardrails hub install hub://scb-10x/correct_language || echo "Hub install failed, using pip fallback"
 
 
 # Layer on for other components

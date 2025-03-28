@@ -64,3 +64,11 @@ beautifulsoup4
 # Llama Index for RAG
 llama-index
 llama-index-llms-ollama
+
+# Guardrails-related packages for filters
+guardrails-ai>=0.4.0
+guardrails-hub-nsfw-text
+guardrails-hub-correct-language
+fast-langdetect
+iso-language-codes
+profanity-check
