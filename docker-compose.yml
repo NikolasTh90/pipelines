@@ -35,7 +35,7 @@ services:
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    command: ["bash", "start.sh"]
+    command: tail -f /dev/null
 
 volumes:
   pipelines_data:
