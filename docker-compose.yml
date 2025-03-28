@@ -12,6 +12,7 @@ services:
     ports:
       - "9099:9099"
     volumes:
+      - ./:/app  # Mount the current directory to /app in the containerA
       - pipelines_data:/app/pipelines
       # Mount local pipeline directory for development (optional, uncomment if needed)
       # - ./pipelines:/app/pipelines
