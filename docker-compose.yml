@@ -24,6 +24,7 @@ services:
       - GUARDRAILS_AUTO_INSTALL=true
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - GUARDRAILS_API_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJnaXRodWJ8NDE3MDY1MzUiLCJhcGlLZXlJZCI6ImQyOTk5ZDIxLTFjYmMtNGQ2YS04MmQwLTZkNmY1NjU3YzNmOCIsInNjb3BlIjoicmVhZDpwYWNrYWdlcyIsInBlcm1pc3Npb25zIjpbXSwiaWF0IjoxNzQzMTUyODU1LCJleHAiOjQ4OTY3NTI4NTV9.LUbwpX0Z6xVol8wCJO6YxUfAX77QUOAE3_-UX70CBRQ
     deploy:
       resources:
         reservations:
@@ -34,6 +35,7 @@ services:
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    command: ["bash", "start.sh"]
 
 volumes:
   pipelines_data:

@@ -44,6 +44,8 @@ RUN if [ "$MINIMUM_BUILD" = "true" ]; then \
         uv pip install --system -r requirements.txt --no-cache-dir; \
     fi
 
+RUN guardrails configure --api-key $GUARDRAILS_API_KEY 
+    
 RUN echo "Installing Guardrails hub components..." && \
 guardrails hub install hub://guardrails/nsfw_text || echo "Hub install failed, using pip fallback" && \
 guardrails hub install hub://scb-10x/correct_language || echo "Hub install failed, using pip fallback"
@@ -69,4 +71,4 @@ ENV HOST="0.0.0.0"
 ENV PORT="9099"
 
 # if we already installed the requirements on build, we can skip this step on run
-ENTRYPOINT [ "bash", "start.sh" ]
+# ENTRYPOINT [ "bash", "start.sh" ]
