@@ -46,9 +46,9 @@ RUN if [ "$MINIMUM_BUILD" = "true" ]; then \
 
 RUN guardrails configure --token "$GUARDRAILS_API_KEY" --disable-metrics --disable-remote-inferencing
     
-RUN echo "Installing Guardrails hub components..." && \
-guardrails hub install hub://guardrails/nsfw_text || echo "Hub install failed, using pip fallback" && \
-guardrails hub install hub://scb-10x/correct_language || echo "Hub install failed, using pip fallback"
+RUN echo "Installing Guardrails hub components..."
+RUN guardrails hub install hub://guardrails/nsfw_text
+RUN guardrails hub install hub://scb-10x/correct_language 
 
 
 # Layer on for other components
