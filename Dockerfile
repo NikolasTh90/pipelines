@@ -44,7 +44,7 @@ RUN if [ "$MINIMUM_BUILD" = "true" ]; then \
         uv pip install --system -r requirements.txt --no-cache-dir; \
     fi
 
-RUN guardrails configure --api-key $GUARDRAILS_API_KEY 
+RUN guardrails configure --token "$GUARDRAILS_API_KEY" --disable-metrics --disable-remote-inferencing
     
 RUN echo "Installing Guardrails hub components..." && \
 guardrails hub install hub://guardrails/nsfw_text || echo "Hub install failed, using pip fallback" && \
