@@ -4,15 +4,18 @@ import subprocess
 import importlib.util
 import time
 import traceback
+import re
 from typing import Optional, List
 from pydantic import BaseModel
-import re
-import logging
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, 
-                   format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger("NSFW_Filter")
+# Import common utilities from pipelines
+from utils.pipelines.logging import get_logger
+from utils.pipelines.device import set_device, clear_gpu_memory, print_environment_info
+from utils.pipelines.installation import install_package, install_hub_validator
+from utils.pipelines.imports import try_import_from_paths
+
+# Configure logger using utility function
+logger = get_logger("NSFW_Filter")
 
 class Pipeline:
     class Valves(BaseModel):
@@ -48,20 +51,14 @@ class Pipeline:
         self.nsfw_pattern = None
         self.has_alt_detector = False
         
-        # Set device for GPU/CPU
-        if self.valves.use_gpu:
-            os.environ["DEVICE"] = "cuda"
-            logger.info("Set NSFW validator to use GPU (CUDA)")
-        else:
-            os.environ["DEVICE"] = "cpu" 
-            logger.info("Set NSFW validator to use CPU")
+        # Set device for GPU/CPU using utility function
+        set_device(self.valves.use_gpu)
         
-        # Print diagnostic information
-        self._print_environment_info()
+        # Print diagnostic information using utility function
+        print_environment_info(logger)
         
         # Set logging level based on configuration
-        if hasattr(logging, self.valves.log_level.upper()):
-            logger.setLevel(getattr(logging, self.valves.log_level.upper()))
+        logger.setLevel(self.valves.log_level.upper())
         
         # Try to import Guardrails components
         logger.info("Initializing Guardrails NSFW Filter...")
@@ -71,42 +68,6 @@ class Pipeline:
         if self.valves.use_fallback_detection:
             self._setup_enhanced_fallback()
             logger.info("Enhanced fallback detection set up successfully")
-
-    def _print_environment_info(self):
-        """Print diagnostic information about the environment"""
-        logger.info("=== Environment Information ===")
-        logger.info(f"Python version: {sys.version}")
-        logger.info(f"Python executable: {sys.executable}")
-        logger.info(f"Current working directory: {os.getcwd()}")
-        logger.info(f"PYTHONPATH: {os.environ.get('PYTHONPATH', 'Not set')}")
-        logger.info(f"DEVICE: {os.environ.get('DEVICE', 'Not set')}")
-        logger.info(f"sys.path: {sys.path}")
-        
-        # Check GPU availability if using GPU
-        if self.valves.use_gpu:
-            try:
-                import torch
-                logger.info(f"CUDA available: {torch.cuda.is_available()}")
-                if torch.cuda.is_available():
-                    logger.info(f"CUDA device count: {torch.cuda.device_count()}")
-                    logger.info(f"CUDA device name: {torch.cuda.get_device_name(0)}")
-            except ImportError:
-                logger.warning("Torch not available - cannot check CUDA status")
-        
-        # Check if guardrails is in the path
-        guardrails_locations = [p for p in sys.path if 'guardrails' in p]
-        if guardrails_locations:
-            logger.info(f"Potential guardrails locations in path: {guardrails_locations}")
-        
-        # List available modules
-        try:
-            import pkgutil
-            guardrails_specs = [p for p in pkgutil.iter_modules() if 'guardrails' in p.name]
-            logger.info(f"Available guardrails modules: {guardrails_specs}")
-        except Exception as e:
-            logger.warning(f"Error listing modules: {e}")
-        
-        logger.info("===============================")
 
     def _setup_guardrails(self):
         """Set up Guardrails and return the mode (guardrails, fallback, or disabled)"""
@@ -125,7 +86,7 @@ class Pipeline:
             # Attempt installation if configured
             if self.valves.attempt_auto_install:
                 logger.info("Attempting to install Guardrails...")
-                if self._install_guardrails():
+                if install_package("guardrails-ai"):
                     try:
                         import guardrails
                         logger.info("Guardrails successfully installed and imported")
@@ -155,46 +116,24 @@ class Pipeline:
             logger.error(f"Could not import hub from guardrails: {e}")
             return "fallback"
             
-        # Try to import NSFWText specifically - try multiple possible locations
-        nsfw_module_found = False
-        for import_path in [
+        # Try to import NSFWText from various possible paths
+        import_paths = [
             "from guardrails.hub import NSFWText",
             "from guardrails_hub_nsfw_text import NSFWText",
             "from guardrails_grhub_nsfw_text import NSFWText"
-        ]:
-            try:
-                logger.info(f"Trying import: {import_path}")
-                exec(import_path, globals())
-                logger.info("NSFWText successfully imported!")
-                nsfw_module_found = True
-                break
-            except ImportError as e:
-                logger.warning(f"Import failed: {e}")
-            except Exception as e:
-                logger.warning(f"Unexpected error during import: {e}")
+        ]
+        
+        # Use the utility to try importing from multiple paths
+        nsfw_module_found, NSFWText = try_import_from_paths(import_paths, logger=logger)
         
         if not nsfw_module_found:
             logger.error("Could not import NSFWText from any known location")
             # Last attempt - try to install from hub directly
             if self.valves.attempt_auto_install:
                 logger.info("Attempting to install NSFWText validator from hub...")
-                if self._install_nsfw_text():
-                    # Try imports again
-                    for import_path in [
-                        "from guardrails.hub import NSFWText",
-                        "from guardrails_hub_nsfw_text import NSFWText",
-                        "from guardrails_grhub_nsfw_text import NSFWText"
-                    ]:
-                        try:
-                            logger.info(f"Trying import after installation: {import_path}")
-                            exec(import_path, globals())
-                            logger.info("NSFWText successfully imported after installation!")
-                            nsfw_module_found = True
-                            break
-                        except ImportError as e:
-                            logger.warning(f"Import failed after installation: {e}")
-                        except Exception as e:
-                            logger.warning(f"Unexpected error during import after installation: {e}")
+                if install_hub_validator("nsfw_text"):
+                    # Try imports again with the utility
+                    nsfw_module_found, NSFWText = try_import_from_paths(import_paths, logger=logger)
             
             if not nsfw_module_found:
                 logger.error("NSFWText could not be imported after all attempts")
@@ -255,71 +194,6 @@ class Pipeline:
             logger.error("Full traceback:")
             traceback.print_exc()
             return "fallback"
-                
-    def _install_guardrails(self):
-        """Attempt to install Guardrails using subprocess"""
-        try:
-            # First install the guardrails-ai package
-            logger.info("Installing guardrails-ai package...")
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "guardrails-ai"])
-            
-            # Wait a moment for installation to complete
-            time.sleep(2)
-            logger.info("Guardrails-ai package installation completed")
-            return True
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Installation failed: {str(e)}")
-            logger.info("To install manually, run:")
-            logger.info("  pip install guardrails-ai")
-            return False
-        except Exception as e:
-            logger.error(f"Unexpected error during installation: {str(e)}")
-            return False
-
-    def _install_nsfw_text(self):
-        """Attempt to install NSFWText validator from hub"""
-        try:
-            # Install system dependencies (in case they're needed)
-            logger.info("Installing system dependencies for NSFWText...")
-            try:
-                subprocess.check_call([
-                    "apt-get", "update", "-y"
-                ])
-                subprocess.check_call([
-                    "apt-get", "install", "-y",
-                    "libgl1-mesa-glx", "libglib2.0-0", "libsm6",
-                    "libxext6", "libxrender-dev"
-                ])
-                logger.info("System dependencies installed successfully")
-            except Exception as e:
-                logger.warning(f"Could not install system dependencies: {e}")
-                logger.warning("Continuing with hub installation anyway...")
-            
-            # Install NSFWText from hub
-            logger.info("Installing NSFWText validator from Guardrails hub...")
-            subprocess.check_call(["guardrails", "hub", "install", "hub://guardrails/nsfw_text"])
-            time.sleep(2)
-
-            # Try direct pip installation as fallback
-            try:
-                logger.info("Also trying direct pip installation of nsfw_text...")
-                subprocess.check_call([
-                    sys.executable, "-m", "pip", "install", "guardrails-hub-nsfw-text"
-                ])
-            except Exception as e:
-                logger.warning(f"Direct pip installation failed: {e}")
-                logger.warning("Continuing with hub installation only")
-
-            logger.info("NSFWText installation completed")
-            return True
-        except subprocess.CalledProcessError as e:
-            logger.error(f"NSFWText installation failed: {str(e)}")
-            logger.error("To install manually, run:")
-            logger.error("  guardrails hub install hub://guardrails/nsfw_text")
-            return False
-        except Exception as e:
-            logger.error(f"Unexpected error during NSFWText installation: {str(e)}")
-            return False
 
     def _setup_enhanced_fallback(self):
         """Set up enhanced fallback NSFW detection"""
@@ -354,13 +228,13 @@ class Pipeline:
             # Try to install it
             try:
                 logger.info("Attempting to install profanity-check as alternative detector...")
-                subprocess.check_call([
-                    sys.executable, "-m", "pip", "install", "profanity-check"
-                ])
-                from profanity_check import predict_prob
-                self.alt_detector = predict_prob
-                self.has_alt_detector = True
-                logger.info("Successfully installed and set up alternative profanity detector")
+                if install_package("profanity-check"):
+                    from profanity_check import predict_prob
+                    self.alt_detector = predict_prob
+                    self.has_alt_detector = True
+                    logger.info("Successfully installed and set up alternative profanity detector")
+                else:
+                    logger.warning("Could not install alternative detector")
             except Exception as e:
                 logger.warning(f"Could not install alternative detector: {e}")
 
@@ -404,17 +278,10 @@ class Pipeline:
             logger.info(f"Updated on_fail mode to: {self.on_fail_mode}")
         
         # Update GPU/CPU setting if it changed
-        if self.valves.use_gpu:
-            os.environ["DEVICE"] = "cuda"
-            logger.info("Set NSFW validator to use GPU (CUDA)")
-        else:
-            os.environ["DEVICE"] = "cpu" 
-            logger.info("Set NSFW validator to use CPU")
+        set_device(self.valves.use_gpu)
         
         # Update the logging level if it changed
-        if hasattr(logging, self.valves.log_level.upper()):
-            logger.setLevel(getattr(logging, self.valves.log_level.upper()))
-            logger.info(f"Updated log level to {self.valves.log_level.upper()}")
+        logger.setLevel(self.valves.log_level.upper())
         
         # Update the validator if we're using Guardrails
         if self.guardrails_mode == "guardrails":

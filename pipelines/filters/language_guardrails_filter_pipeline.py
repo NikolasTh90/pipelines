@@ -4,12 +4,14 @@ import time
 import traceback
 from typing import Optional, List
 from pydantic import BaseModel
-import logging
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, 
-                   format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger("Language_Filter")
+# Import common utilities from pipelines
+from utils.pipelines.logging import get_logger
+from utils.pipelines.device import set_device, clear_gpu_memory, print_environment_info
+from utils.pipelines.concurrency import run_tasks_concurrently
+
+# Configure logger using utility function
+logger = get_logger("Language_Filter")
 
 class Pipeline:
     class Valves(BaseModel):
@@ -37,70 +39,17 @@ class Pipeline:
         self.default_language = self.valves.default_language
         
         # Set device for GPU/CPU - default to CPU to avoid memory issues
-        self._set_device(self.valves.use_gpu)
+        set_device(self.valves.use_gpu)
         
         # Print diagnostic information
-        self._print_environment_info()
+        print_environment_info(logger)
         
         # Set logging level based on configuration
-        if hasattr(logging, self.valves.log_level.upper()):
-            logger.setLevel(getattr(logging, self.valves.log_level.upper()))
+        logger.setLevel(self.valves.log_level.upper())
         
         # Try to import Guardrails components
         logger.info("Initializing Guardrails Language Filter...")
         self.guardrails_mode = self._setup_guardrails()
-
-    def _set_device(self, use_gpu):
-        """Set the device for translation models with fallback handling"""
-        if use_gpu:
-            try:
-                # Check if CUDA is available
-                import torch
-                if torch.cuda.is_available():
-                    os.environ["DEVICE"] = "cuda"
-                    logger.info("Set language validator to use GPU (CUDA)")
-                    # Check memory to warn about potential issues
-                    free_memory = torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated(0)
-                    free_memory_gb = free_memory / (1024**3)
-                    if free_memory_gb < 2.0:  # Less than 2GB free
-                        logger.warning(f"Low GPU memory detected ({free_memory_gb:.2f} GB free). This may cause issues.")
-                        logger.warning("Consider setting use_gpu=False if the filter fails to initialize.")
-                else:
-                    logger.warning("CUDA not available. Falling back to CPU for language processing.")
-                    os.environ["DEVICE"] = "cpu"
-                    self.valves.use_gpu = False
-            except Exception as e:
-                logger.warning(f"Error checking GPU: {e}. Falling back to CPU for language processing.")
-                os.environ["DEVICE"] = "cpu"
-                self.valves.use_gpu = False
-        else:
-            os.environ["DEVICE"] = "cpu" 
-            logger.info("Set language validator to use CPU")
-
-    def _print_environment_info(self):
-        """Print diagnostic information about the environment"""
-        logger.info("=== Environment Information ===")
-        logger.info(f"Python version: {sys.version}")
-        logger.info(f"Python executable: {sys.executable}")
-        logger.info(f"Current working directory: {os.getcwd()}")
-        logger.info(f"PYTHONPATH: {os.environ.get('PYTHONPATH', 'Not set')}")
-        logger.info(f"DEVICE: {os.environ.get('DEVICE', 'Not set')}")
-        
-        # Check GPU availability if using GPU
-        if self.valves.use_gpu:
-            try:
-                import torch
-                logger.info(f"CUDA available: {torch.cuda.is_available()}")
-                if torch.cuda.is_available():
-                    logger.info(f"CUDA device count: {torch.cuda.device_count()}")
-                    logger.info(f"CUDA device name: {torch.cuda.get_device_name(0)}")
-                    # Print memory information
-                    free_memory = torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated(0)
-                    logger.info(f"GPU free memory: {free_memory / (1024**3):.2f} GB")
-            except ImportError:
-                logger.warning("Torch not available - cannot check CUDA status")
-        
-        logger.info("===============================")
 
     def _setup_guardrails(self):
         """Set up Guardrails and return the mode (guardrails or disabled)"""
@@ -172,7 +121,7 @@ class Pipeline:
                     
                     # Switch to CPU and try again
                     self.valves.use_gpu = False
-                    self._set_device(False)
+                    set_device(False)
                     
                     # Retry with CPU
                     test_guard = Guard().use(
@@ -246,12 +195,10 @@ class Pipeline:
         self.default_language = self.valves.default_language
         
         # Update GPU/CPU setting if it changed
-        self._set_device(self.valves.use_gpu)
+        set_device(self.valves.use_gpu)
         
         # Update the logging level if it changed
-        if hasattr(logging, self.valves.log_level.upper()):
-            logger.setLevel(getattr(logging, self.valves.log_level.upper()))
-            logger.info(f"Updated log level to {self.valves.log_level.upper()}")
+        logger.setLevel(self.valves.log_level.upper())
 
     async def inlet(self, body: dict, user: Optional[dict] = None) -> dict:
         """
@@ -289,7 +236,6 @@ class Pipeline:
         logger.info(f"Validating content: {content_to_validate[:50]}...")
         
         try:
-            import concurrent.futures
             from guardrails import Guard
             
             def validate_language(language):
@@ -316,35 +262,24 @@ class Pipeline:
                 finally:
                     # Free GPU memory if using GPU
                     if self.valves.use_gpu:
-                        try:
-                            import torch
-                            if torch.cuda.is_available():
-                                torch.cuda.empty_cache()
-                                logger.debug(f"Cleared CUDA cache after {language} validation")
-                        except Exception as e:
-                            logger.warning(f"Failed to clear GPU memory: {e}")
+                        clear_gpu_memory()
             
-            # Use a thread pool to run validations concurrently
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                # Submit all validation tasks to the executor
-                future_to_language = {
-                    executor.submit(validate_language, lang): lang 
-                    for lang in self.valves.expected_languages_iso
-                }
-                
-                # Check results as they come in, for fast short-circuiting
-                for future in concurrent.futures.as_completed(future_to_language):
-                    language, is_valid = future.result()
-                    if is_valid:
-                        logger.info(f"Content passed validation for {language} - returning unmodified")
-                        # Cancel all remaining tasks to save resources
-                        for f in future_to_language:
-                            if not f.done() and f != future:
-                                f.cancel()
-                        
-                        # Clear GPU memory before returning
-                        self._clear_gpu_memory()
-                        return body
+            # Prepare validation tasks for each language
+            validation_tasks = [(validate_language, (lang,)) for lang in self.valves.expected_languages_iso]
+            
+            # Use the concurrency utility to run all validations in parallel
+            validation_results = run_tasks_concurrently(
+                validation_tasks, 
+                cancel_on_first_success=True  # Stop as soon as we find a valid language
+            )
+            
+            # Check if any language validation succeeded
+            valid_language_found = any(is_valid for _, is_valid in validation_results)
+            
+            if valid_language_found:
+                logger.info("Content passed validation for at least one language - returning unmodified")
+                clear_gpu_memory()
+                return body
             
             # If we get here, content failed validation for all expected languages
             logger.info("Content failed validation for all expected languages - translating to default language")
@@ -352,7 +287,7 @@ class Pipeline:
             # Only translate if enforce_language is True
             if not self.valves.enforce_language:
                 logger.info("Language enforcement is disabled - passing through unmodified")
-                self._clear_gpu_memory()
+                clear_gpu_memory()
                 return body
                 
             try:
@@ -380,34 +315,16 @@ class Pipeline:
                 logger.error(f"Error during translation: {e}")
             finally:
                 # Ensure GPU memory is cleared after translation
-                self._clear_gpu_memory()
+                clear_gpu_memory()
                 
         except Exception as e:
             logger.error(f"Error during language validation/translation: {e}")
             logger.error(traceback.format_exc())
             # Ensure GPU memory is cleared even if an exception occurs
-            self._clear_gpu_memory()
+            clear_gpu_memory()
         
         outlet_end = time.time()
         logger.info(f"Outlet processing completed in {outlet_end - outlet_start:.2f} seconds")
-        self._clear_gpu_memory()
+        clear_gpu_memory()
         
         return body
-
-    def _clear_gpu_memory(self):
-        """Helper method to clear GPU memory"""
-        if self.valves.use_gpu:
-            try:
-                import torch
-                if torch.cuda.is_available():
-                    # Free cache
-                    torch.cuda.empty_cache()
-                    logger.debug("Cleared CUDA cache")
-                    
-                    # Report memory stats for debugging
-                    if logger.level <= logging.DEBUG:
-                        allocated = torch.cuda.memory_allocated() / (1024**3)
-                        reserved = torch.cuda.memory_reserved() / (1024**3)
-                        logger.debug(f"GPU memory after cleanup: allocated={allocated:.2f}GB, reserved={reserved:.2f}GB")
-            except Exception as e:
-                logger.warning(f"Failed to clear GPU memory: {e}")
