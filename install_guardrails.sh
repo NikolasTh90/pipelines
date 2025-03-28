@@ -19,6 +19,7 @@ echo "Installing Guardrails hub components..."
 HUB_MODULES=(
   "hub://guardrails/nsfw_text"
   "hub://scb-10x/correct_language"
+  "hub://tryolabs/restricttotopic"
 )
 
 for module in "${HUB_MODULES[@]}"; do
