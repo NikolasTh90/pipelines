@@ -262,9 +262,16 @@ class Pipeline:
     async def outlet(self, body: dict, user: Optional[dict] = None) -> dict:
         """
         Process outgoing content according to the specified workflow:
-        1. Check if content passes validation for any of the expected languages
+        1. Check if content passes validation for any of the expected languages concurrently
         2. If not, translate it to the default language
+        3. Ensure proper GPU memory cleanup throughout
         """
+        # Safely check if content is already blocked
+        if body.get("_blocked"):
+            if body.get("_raise_block"):
+                raise Exception(body.get("_blocked_reason", "Content blocked"))
+            else:
+                return body
         outlet_start = time.time()
         
         # If Guardrails not available, just pass through
@@ -282,47 +289,70 @@ class Pipeline:
         logger.info(f"Validating content: {content_to_validate[:50]}...")
         
         try:
+            import concurrent.futures
             from guardrails import Guard
             
-            # Create a dictionary to store validation results for each language
-            validation_results = {}
-            
-            # Check each expected language
-            for expected_language in self.valves.expected_languages_iso:
-                logger.info(f"Testing if content is in language: {expected_language}")
-                
+            def validate_language(language):
+                """Validates content against a specific language and returns (language, is_valid)"""
                 try:
+                    logger.info(f"Testing if content is in language: {language}")
                     # Create a guard with noop on_fail - we just want to check if it passes
                     temp_guard = Guard().use(
                         CorrectLanguage,
-                        expected_language_iso=expected_language,
+                        expected_language_iso=language,
                         threshold=self.valves.threshold,
                         on_fail="noop"  # Don't modify content, just check
                     )
                     
                     # Validate against this language
                     validation_result = temp_guard.validate(content_to_validate)
+                    is_valid = validation_result.validation_passed
                     
-                    # Store whether validation passed for this language
-                    validation_results[expected_language] = validation_result.validation_passed
-                    logger.info(f"Validation for {expected_language}: {validation_result.validation_passed}")
+                    logger.info(f"Validation for {language}: {is_valid}")
+                    return language, is_valid
                 except Exception as e:
-                    logger.error(f"Error validating for {expected_language}: {e}")
-                    # Set to False for this language but continue with others
-                    validation_results[expected_language] = False
+                    logger.error(f"Error validating for {language}: {e}")
+                    return language, False
+                finally:
+                    # Free GPU memory if using GPU
+                    if self.valves.use_gpu:
+                        try:
+                            import torch
+                            if torch.cuda.is_available():
+                                torch.cuda.empty_cache()
+                                logger.debug(f"Cleared CUDA cache after {language} validation")
+                        except Exception as e:
+                            logger.warning(f"Failed to clear GPU memory: {e}")
             
-            # Check if content passed validation for at least one language
-            if any(validation_results.values()):
-                # Content is in at least one of the expected languages
-                logger.info("Content passed validation for at least one expected language - no translation needed")
-                return body
+            # Use a thread pool to run validations concurrently
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                # Submit all validation tasks to the executor
+                future_to_language = {
+                    executor.submit(validate_language, lang): lang 
+                    for lang in self.valves.expected_languages_iso
+                }
                 
+                # Check results as they come in, for fast short-circuiting
+                for future in concurrent.futures.as_completed(future_to_language):
+                    language, is_valid = future.result()
+                    if is_valid:
+                        logger.info(f"Content passed validation for {language} - returning unmodified")
+                        # Cancel all remaining tasks to save resources
+                        for f in future_to_language:
+                            if not f.done() and f != future:
+                                f.cancel()
+                        
+                        # Clear GPU memory before returning
+                        self._clear_gpu_memory()
+                        return body
+            
             # If we get here, content failed validation for all expected languages
             logger.info("Content failed validation for all expected languages - translating to default language")
             
             # Only translate if enforce_language is True
             if not self.valves.enforce_language:
                 logger.info("Language enforcement is disabled - passing through unmodified")
+                self._clear_gpu_memory()
                 return body
                 
             try:
@@ -348,12 +378,36 @@ class Pipeline:
                     logger.warning("Translation failed - no validated output available")
             except Exception as e:
                 logger.error(f"Error during translation: {e}")
+            finally:
+                # Ensure GPU memory is cleared after translation
+                self._clear_gpu_memory()
                 
         except Exception as e:
             logger.error(f"Error during language validation/translation: {e}")
             logger.error(traceback.format_exc())
+            # Ensure GPU memory is cleared even if an exception occurs
+            self._clear_gpu_memory()
         
         outlet_end = time.time()
         logger.info(f"Outlet processing completed in {outlet_end - outlet_start:.2f} seconds")
+        self._clear_gpu_memory()
         
         return body
+
+    def _clear_gpu_memory(self):
+        """Helper method to clear GPU memory"""
+        if self.valves.use_gpu:
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    # Free cache
+                    torch.cuda.empty_cache()
+                    logger.debug("Cleared CUDA cache")
+                    
+                    # Report memory stats for debugging
+                    if logger.level <= logging.DEBUG:
+                        allocated = torch.cuda.memory_allocated() / (1024**3)
+                        reserved = torch.cuda.memory_reserved() / (1024**3)
+                        logger.debug(f"GPU memory after cleanup: allocated={allocated:.2f}GB, reserved={reserved:.2f}GB")
+            except Exception as e:
+                logger.warning(f"Failed to clear GPU memory: {e}")

@@ -496,6 +496,12 @@ class Pipeline:
         Raises:
             Exception: If NSFW content is detected and blocking is enabled
         """
+        # Safely check if content is already blocked
+        if body.get("_blocked"):
+            if body.get("_raise_block"):
+                raise Exception(body.get("_blocked_reason", "Content blocked"))
+            else:
+                return body
         if "messages" not in body or not body["messages"]:
             logger.debug("No messages found in request body")
             return body
@@ -601,10 +607,17 @@ class Pipeline:
         # If NSFW content was detected and blocking is enabled, raise an exception
         if is_nsfw and self.valves.block_nsfw_content:
             logger.warning(f"NSFW content detected in message from {username} - BLOCKED")
+            body["_blocked"] = True
+            body["_blocked_reason"] = error_message
+            body["_blocked_by"] = "nsfw_filter"
+            body["_raise_block"] = True
             raise Exception(error_message)
         elif is_nsfw:
             # If blocking is disabled, just log the detection
             logger.warning(f"NSFW content detected in message from {username} (not blocked)")
+            body["_blocked"] = True
+            body["_blocked_reason"] = error_message
+            body["_blocked_by"] = "nsfw_filter"
         else:
             logger.info(f"Message from {username} passed NSFW check")
         
