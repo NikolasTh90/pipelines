@@ -22,6 +22,8 @@ services:
       - DEVICE=cuda
       # Pre-install Guardrails components
       - GUARDRAILS_AUTO_INSTALL=true
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     deploy:
       resources:
         reservations:
