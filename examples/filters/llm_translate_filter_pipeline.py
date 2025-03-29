@@ -9,6 +9,8 @@ from utils.pipelines.main import get_last_user_message, get_last_assistant_messa
 
 class Pipeline:
     class Valves(BaseModel):
+        enable: bool = True
+
         # List target pipeline ids (models) that this filter will be connected to.
         # If you want to connect this filter to all pipelines, you can set pipelines to ["*"]
         # e.g. ["llama3:latest", "gpt-3.5-turbo"]

@@ -24,6 +24,8 @@ return it in the format {{ "name": \"functionName\", "parameters": {{ "key":
 
 class Pipeline:
     class Valves(BaseModel):
+        enable: bool = True
+
         # List target pipeline ids (models) that this filter will be connected to.
         # If you want to connect this filter to all pipelines, you can set pipelines to ["*"]
         pipelines: List[str] = []
@@ -87,6 +89,14 @@ And answer according to the language of the user's question.""",
 
     async def inlet(self, body: dict, user: Optional[dict] = None) -> dict:
         # If title generation is requested, skip the function calling filter
+        if body.get("_blocked"):
+            if body.get("_raise_block"):
+                raise Exception(body.get("_blocked_reason", "Content blocked"))
+            else:
+                return body
+        # Check if filter is enabled. If not, skip processing.
+        if not self.valves.enable:
+            return body
         if body.get("title", False):
             return body
 

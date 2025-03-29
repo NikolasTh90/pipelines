@@ -19,14 +19,16 @@ logger = get_logger("NSFW_Filter")
 
 class Pipeline:
     class Valves(BaseModel):
+        enable: bool = True
+
         # List target pipeline ids (models) that this filter will be connected to
         pipelines: List[str] = ["*"]
         
         # Assign a priority level to the filter pipeline
-        priority: int = 0
+        priority: int = 2
         
         # Custom configuration for NSFW detection
-        threshold: float = 0.8  # Threshold for NSFW detection (0.0 to 1.0)
+        threshold: float = 0.91# Threshold for NSFW detection (0.0 to 1.0)
         log_level: str = "info"
         block_nsfw_content: bool = True
         validation_method: str = "sentence"  # 'sentence' or 'full'
@@ -369,6 +371,11 @@ class Pipeline:
                 raise Exception(body.get("_blocked_reason", "Content blocked"))
             else:
                 return body
+        if not self.valves.enable:
+            logger.info("Language Filter is disabled; bypassing validation in inlet.")
+            return body
+        
+        
         if "messages" not in body or not body["messages"]:
             logger.debug("No messages found in request body")
             return body

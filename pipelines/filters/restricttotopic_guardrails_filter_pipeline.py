@@ -9,30 +9,32 @@ from pydantic import BaseModel
 from utils.pipelines.logging import get_logger
 from utils.pipelines.device import set_device, clear_gpu_memory, print_environment_info
 from utils.pipelines.concurrency import run_tasks_concurrently
-
+from utils.pipelines.main import get_last_user_message
 # Configure logger using utility function
 logger = get_logger("RestrictToTopic_Filter")
 
 class Pipeline:
     class Valves(BaseModel):
+        enable: bool = True
+
         # List target pipeline IDs (models) that this filter will be connected to
         pipelines: List[str] = ["*"]
         
         # Priority of the filter
-        priority: int = 0
+        priority: int = 1
 
         # Configuration for topic restriction
         valid_topics: List[str] = ["sports"]
         invalid_topics: List[str] = []  # Optionally set topics that should be disallowed
-        disable_classifier: bool = True
-        disable_llm: bool = False
+        disable_classifier: bool = False
+        disable_llm: bool = True
         model_threshold: float = 0.5
         on_fail: str = "exception"  # Options: exception, fix, filter, refrain, noop, etc.
         
         # Miscellaneous settings
         log_level: str = "info"
         enforce_topic: bool = True   # If True, enforce topic validation (otherwise bypass)
-        use_gpu: bool = False        # Default to CPU to avoid CUDA memory issues
+        use_gpu: bool = True    # Default to CPU to avoid CUDA memory issues
 
     def __init__(self):
         # This filter uses Guardrails’ RestrictToTopic validator to check if text is related to a topic
@@ -187,24 +189,25 @@ class Pipeline:
 
     async def inlet(self, body: dict, user: Optional[dict] = None) -> dict:
         """
-        Inlet passes the message through unchanged.
-        """
-        return body
-
-    async def outlet(self, body: dict, user: Optional[dict] = None) -> dict:
-        """
-        Process outgoing text:
-         1. Validate the text using RestrictToTopic.
-         2. If validation fails and enforce_topic is True, modify or block the text.
-         3. Clear GPU memory afterwards.
+        Inlet now processes the message:
+         1. If the filter is disabled, bypass validation.
+         2. Otherwise validate the text using RestrictToTopic.
+         3. If validation fails and enforce_topic is True, modify or block the text.
+         4. Always clear GPU memory afterwards.
         """
         if body.get("_blocked"):
             if body.get("_raise_block"):
                 raise Exception(body.get("_blocked_reason", "Content blocked"))
             else:
                 return body
+        # Check if filter is enabled. If not, skip processing.
+        if not self.valves.enable:
+            logger.info("RestrictToTopic Filter is disabled; bypassing validation in inlet.")
+            return body
         
-        outlet_start = time.time()
+       
+        
+        inlet_start = time.time()
         # If Guardrails not available, pass through
         if self.guardrails_mode != "guardrails":
             logger.warning("RestrictToTopic validation disabled - passing content unmodified")
@@ -213,7 +216,7 @@ class Pipeline:
         # Extract text to validate; expect it to be in the last message's content field.
         text = None
         if "messages" in body and body["messages"]:
-            text = body["messages"][-1].get("content")
+            text = get_last_user_message(body["messages"])
         if not text:
             logger.warning("No text found to validate")
             return body
@@ -225,6 +228,8 @@ class Pipeline:
             if result.validation_passed:
                 logger.info("Text passed topic validation; returning unmodified")
                 clear_gpu_memory()
+                inlet_end = time.time()
+                logger.info(f"Inlet processing completed in {inlet_end - inlet_start:.2f} seconds")
                 return body
             else:
                 logger.info("Text failed topic validation")
@@ -242,12 +247,16 @@ class Pipeline:
                     logger.warning("Text marked as invalid but not blocked due to configuration")
                     body["_blocked"] = True
                     body["_blocked_reason"] = "Text topic validation failed"
+                    
         except Exception as e:
+            if body.get("_blocked") and body.get("_raise_block"):
+                raise Exception(body.get("_blocked_reason", "Content Blocked"))
             logger.error(f"Error during topic validation: {e}")
             traceback.print_exc()
         finally:
             clear_gpu_memory()
-
-        outlet_end = time.time()
-        logger.info(f"Outlet processing completed in {outlet_end - outlet_start:.2f} seconds")
+        
+        clear_gpu_memory()
+        inlet_end = time.time()
+        logger.info(f"Inlet processing completed in {inlet_end - inlet_start:.2f} seconds")
         return body

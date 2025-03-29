@@ -15,11 +15,13 @@ logger = get_logger("Language_Filter")
 
 class Pipeline:
     class Valves(BaseModel):
+        enable: bool = True
+        
         # List target pipeline ids (models) that this filter will be connected to
         pipelines: List[str] = ["*"]
         
         # Assign a priority level to the filter pipeline
-        priority: int = 0
+        priority: int = 3
         
         # Custom configuration for language detection and translation
         expected_languages_iso: List[str] = ["en", "el"]  # Default expected languages: English and Greek
@@ -200,12 +202,6 @@ class Pipeline:
         # Update the logging level if it changed
         logger.setLevel(self.valves.log_level.upper())
 
-    async def inlet(self, body: dict, user: Optional[dict] = None) -> dict:
-        """
-        Pass through inlet - no processing needed
-        """
-        return body
-
     async def outlet(self, body: dict, user: Optional[dict] = None) -> dict:
         """
         Process outgoing content according to the specified workflow:
@@ -213,12 +209,18 @@ class Pipeline:
         2. If not, translate it to the default language
         3. Ensure proper GPU memory cleanup throughout
         """
+
         # Safely check if content is already blocked
         if body.get("_blocked"):
             if body.get("_raise_block"):
                 raise Exception(body.get("_blocked_reason", "Content blocked"))
             else:
                 return body
+            
+        
+        if not self.valves.enable:
+            logger.info("Language Filter is disabled; bypassing validation in inlet.")
+            return body
         outlet_start = time.time()
         
         # If Guardrails not available, just pass through

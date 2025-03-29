@@ -33,7 +33,7 @@ class Pipeline(FunctionCallingBlueprint):
         def get_current_weather(
             self,
             location: str,
-            unit: Literal["metric", "fahrenheit"] = "fahrenheit",
+            unit: Literal["metric", "fahrenheit"] = "metric",
         ) -> str:
             """
             Get the current weather for a location. If the location is not found, return an empty string.
